@@ -2,7 +2,7 @@
 
 ## Summary
 
-The `builder-code` extension enables **on-chain attribution tracking** for x402 payments by appending [ERC-8021](https://github.com/ethereum/ERCs/pull/948) Schema 2 builder codes to settlement transaction calldata. It attributes which application exposed the paid endpoint and which facilitator settled the payment.
+The `builder-code` extension enables **on-chain attribution tracking** for x402 payments by appending [ERC-8021](https://eip.tools/eip/8021) Schema 2 builder codes to settlement transaction calldata. It attributes which application exposed the paid endpoint and which facilitator settled the payment.
 
 This extension only implements **Schema 2** (CBOR-encoded) of ERC-8021. The `s` (services), `m` (custom metadata), and `r` (custom registries) fields are not supported.
 
@@ -16,20 +16,20 @@ ERC-8021 defines a structured data suffix appended to transaction calldata for e
 
 The complete suffix appended to calldata is (ordered end of calldata backwards):
 
-| Component | Size | Description |
-|-----------|------|-------------|
-| `ercMarker` | 16 bytes | Constant identifier: `80218021802180218021802180218021` |
-| `schemaId` | 1 byte | `0x02` for Schema 2 |
-| `cborLength` | 2 bytes | Length of CBOR data (big-endian) |
-| `cborData` | variable | CBOR-encoded map of attribution fields |
+| Component    | Size     | Description                                             |
+| ------------ | -------- | ------------------------------------------------------- |
+| `ercMarker`  | 16 bytes | Constant identifier: `80218021802180218021802180218021` |
+| `schemaId`   | 1 byte   | `0x02` for Schema 2                                     |
+| `cborLength` | 2 bytes  | Length of CBOR data (big-endian)                        |
+| `cborData`   | variable | CBOR-encoded map of attribution fields                  |
 
 Wire order: `[cborData][cborLength (2B)][schemaId (1B)][ercMarker (16B)]`
 
 ### CBOR Map Fields
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `a` | string | App code — the application that exposed the paid endpoint |
+| Key | Type   | Description                                                     |
+| --- | ------ | --------------------------------------------------------------- |
+| `a` | string | App code — the application that exposed the paid endpoint       |
 | `w` | string | Wallet code — the facilitator that settled the payment on-chain |
 
 All fields are optional.
@@ -37,6 +37,7 @@ All fields are optional.
 ### Builder Code Format
 
 Codes must match the pattern `^[a-z0-9_]{1,32}$`:
+
 - **Length**: 1-32 characters
 - **Characters**: lowercase alphanumeric and underscores only
 
@@ -100,10 +101,10 @@ The `w` (wallet) field is **not** set by the client. It is added by the facilita
 
 ## Builder Code Fields
 
-| Field | Set by | When | Description |
-|-------|--------|------|-------------|
-| `a` | Application | Per-route middleware configuration | Identifies the application exposing the paid endpoint |
-| `w` | Facilitator | Settlement | Identifies the facilitator settling the payment on-chain |
+| Field | Set by      | When                               | Description                                              |
+| ----- | ----------- | ---------------------------------- | -------------------------------------------------------- |
+| `a`   | Application | Per-route middleware configuration | Identifies the application exposing the paid endpoint    |
+| `w`   | Facilitator | Settlement                         | Identifies the facilitator settling the payment on-chain |
 
 ---
 
@@ -189,6 +190,7 @@ Settlement calldata suffix (hex):
 ```
 
 Decoded:
+
 - CBOR: `{"a": "bc_myapp"}`
 - cborLength: `0x000c` (12 bytes)
 - schemaId: `0x02`
@@ -203,6 +205,7 @@ After facilitator adds its `w` code at settlement:
 ```
 
 Decoded:
+
 - CBOR: `{"a": "bc_myapp", "w": "bc_myfacilitator"}`
 - cborLength: `0x001f` (31 bytes)
 - schemaId: `0x02`
@@ -215,6 +218,7 @@ Decoded:
 ### Builder Code Validation
 
 All builder codes (`a` and `w`) must:
+
 - Match `^[a-z0-9_]{1,32}$`
 - Be 1-32 characters long
 - Contain only lowercase letters, digits, and underscores
@@ -242,8 +246,8 @@ Off-chain parsers can extract builder code attribution from settlement calldata 
 
 ## Responsibilities
 
-| Role | Responsibility |
-|------|----------------|
-| **Application** | Declares `a` (app code) per-route in the payment middleware configuration |
-| **Client** | Echoes builder code extension from `PaymentRequired` into `PaymentPayload` |
+| Role            | Responsibility                                                                          |
+| --------------- | --------------------------------------------------------------------------------------- |
+| **Application** | Declares `a` (app code) per-route in the payment middleware configuration               |
+| **Client**      | Echoes builder code extension from `PaymentRequired` into `PaymentPayload`              |
 | **Facilitator** | Adds `w` (wallet code) at settlement, encodes the full CBOR suffix, appends to calldata |
