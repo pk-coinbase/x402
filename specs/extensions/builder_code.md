@@ -4,7 +4,7 @@
 
 The `builder-code` extension enables **on-chain attribution tracking** for x402 payments by appending [ERC-8021](https://eip.tools/eip/8021) Schema 2 builder codes to settlement transaction calldata. It attributes which application exposed the paid endpoint and which facilitator settled the payment.
 
-This extension only implements **Schema 2** (CBOR-encoded) of ERC-8021. The `s` (services), `m` (custom metadata), and `r` (custom registries) fields are not supported.
+This extension implements **Schema 2** (CBOR-encoded) of ERC-8021. The `m` (custom metadata) and `r` (custom registries) fields are not supported.
 
 ---
 
@@ -27,10 +27,11 @@ Wire order: `[cborData][cborLength (2B)][schemaId (1B)][ercMarker (16B)]`
 
 ### CBOR Map Fields
 
-| Key | Type   | Description                                                     |
-| --- | ------ | --------------------------------------------------------------- |
-| `a` | string | App code — the application that exposed the paid endpoint       |
-| `w` | string | Wallet code — the facilitator that settled the payment on-chain |
+| Key | Type            | Description                                                     |
+| --- | --------------- | --------------------------------------------------------------- |
+| `a` | string          | App code — the application that exposed the paid endpoint       |
+| `w` | string          | Wallet code — the facilitator that settled the payment on-chain |
+| `s` | array of string | Service codes — clients and intermediaries that participated    |
 
 All fields are optional.
 
@@ -70,6 +71,14 @@ The application declares its builder code per-route in the payment middleware co
             "type": "string",
             "pattern": "^[a-z0-9_]{1,32}$",
             "description": "Wallet builder code"
+          },
+          "s": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9_]{1,32}$"
+            },
+            "description": "Service builder codes"
           }
         },
         "additionalProperties": false
@@ -83,13 +92,14 @@ The application declares its builder code per-route in the payment middleware co
 
 ## `PaymentPayload`
 
-The client echoes the builder code extension from `PaymentRequired` into its `PaymentPayload`.
+The client echoes the builder code extension from `PaymentRequired` into its `PaymentPayload`, and may append its own code(s) to the `s` array.
 
 ```json
 {
   "extensions": {
     "builder-code": {
-      "a": "my_app"
+      "a": "my_app",
+      "s": ["my_client"]
     }
   }
 }
@@ -105,6 +115,7 @@ The `w` (wallet) field is **not** set by the client. It is added by the facilita
 | ----- | ----------- | ---------------------------------- | -------------------------------------------------------- |
 | `a`   | Application | Per-route middleware configuration | Identifies the application exposing the paid endpoint    |
 | `w`   | Facilitator | Settlement                         | Identifies the facilitator settling the payment on-chain |
+| `s`   | Client      | Payment payload construction       | Identifies the client(s) and intermediaries that participated |
 
 ---
 
@@ -112,10 +123,11 @@ The `w` (wallet) field is **not** set by the client. It is added by the facilita
 
 When a facilitator settles a payment containing the `builder-code` extension, it:
 
-1. Reads `a` (app code) from the payment payload extensions
-2. Adds its own builder code as the `w` (wallet) field
-3. Encodes the combined data as an ERC-8021 Schema 2 CBOR suffix
-4. Appends the suffix to the settlement transaction calldata
+1. Verifies that `PaymentPayload.extensions["builder-code"].a` matches `PaymentRequired.extensions["builder-code"].info.a`
+2. Reads `a` (app code) and `s` (service codes) from the payment payload extensions
+3. Adds its own builder code as the `w` (wallet) field
+4. Encodes the combined data as an ERC-8021 Schema 2 CBOR suffix
+5. Appends the suffix to the settlement transaction calldata
 
 The facilitator's builder code is configured at initialization and validated against the same `^[a-z0-9_]{1,32}$` pattern.
 
@@ -123,7 +135,7 @@ The facilitator's builder code is configured at initialization and validated aga
 
 The facilitator builds the suffix as follows:
 
-1. CBOR-encode a map containing all present fields (`a`, `w`)
+1. CBOR-encode a map containing all present fields (`a`, `s`, `w`)
 2. Compute `cborLength` as the byte length of the CBOR data (2 bytes, big-endian)
 3. Append: `[cborData][cborLength][0x02][80218021802180218021802180218021]`
 4. Return the hex-encoded result for the settlement mechanism to append to calldata
@@ -145,16 +157,19 @@ Client (App)                   Resource Server                Facilitator
       |                              |                              |
   4.  |--- request + payment ------->|                              |
       |   extensions.builder-code:   |                              |
-      |     { a: "my_app" }         |                              |
+      |     { a: "my_app",          |                              |
+      |       s: ["my_client"] }    |                              |
       |                              |                              |
   5.  |                              |--- verify/settle ----------->|
       |                              |   extensions.builder-code:   |
-      |                              |     { a: "my_app" }         |
+      |                              |     { a: "my_app",          |
+      |                              |       s: ["my_client"] }    |
       |                              |                              |
   6.  |                              |         Facilitator adds w,  |
       |                              |         encodes CBOR suffix, |
       |                              |         appends to calldata: |
       |                              |         [cbor({a:"my_app",   |
+      |                              |          s:["my_client"],    |
       |                              |          w:"my_fac"})]       |
       |                              |         [cborLen][0x02][mark] |
       |                              |                              |
@@ -217,13 +232,17 @@ Decoded:
 
 ### Builder Code Validation
 
-All builder codes (`a` and `w`) must:
+All builder codes (`a`, `w`, and each entry in `s`) must:
 
 - Match `^[a-z0-9_]{1,32}$`
 - Be 1-32 characters long
 - Contain only lowercase letters, digits, and underscores
 
-Invalid codes must be rejected at declaration time (application) and at construction time (facilitator).
+Invalid codes must be rejected at declaration time (application) and at construction time (facilitator). The facilitator validates each entry in `s` for format only — `s` is client self-reported and cannot be verified against any authoritative source.
+
+### App Code Echo Validation
+
+The facilitator MUST verify that the `a` field echoed by the client in `PaymentPayload.extensions["builder-code"]` exactly matches the `a` field declared by the application in `PaymentRequired.extensions["builder-code"].info`. A mismatch indicates the client tampered with the attribution and the payment MUST be rejected.
 
 ### Schema Validation
 
@@ -240,14 +259,14 @@ Off-chain parsers can extract builder code attribution from settlement calldata 
 3. Extract the preceding 2 bytes as `cborLength` (big-endian)
 4. Extract the preceding `cborLength` bytes as `cborData`
 5. Decode `cborData` as a CBOR map
-6. Read `a` (app code) and `w` (wallet code) from the map
+6. Read `a` (app code), `w` (wallet code), and `s` (service codes array) from the map
 
 ---
 
 ## Responsibilities
 
-| Role            | Responsibility                                                                          |
-| --------------- | --------------------------------------------------------------------------------------- |
-| **Application** | Declares `a` (app code) per-route in the payment middleware configuration               |
-| **Client**      | Echoes builder code extension from `PaymentRequired` into `PaymentPayload`              |
-| **Facilitator** | Adds `w` (wallet code) at settlement, encodes the full CBOR suffix, appends to calldata |
+| Role            | Responsibility                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Application** | Declares `a` (app code) per-route in the payment middleware configuration                                   |
+| **Client**      | Echoes `a` from `PaymentRequired`; optionally populates `s` with its own service code(s) in `PaymentPayload` |
+| **Facilitator** | Adds `w` (wallet code) at settlement, encodes the full CBOR suffix (`a`, `s`, `w`), appends to calldata    |
